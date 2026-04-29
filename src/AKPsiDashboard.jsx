@@ -18,7 +18,7 @@ const RECRUITERS = [
     name: "Jonalyn Trimboli",
     title: "Campus Recruiter",
     company: "Uline",
-    linkedin: "https://www.linkedin.com/in/jonalyn-trimboli",
+    linkedin: "https://www.linkedin.com/in/jonalyn-trimboli-4a221176/",
   },
 ];
 
