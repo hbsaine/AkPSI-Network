@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, collection, addDoc, doc, getDoc, getDocs, updateDoc, deleteDoc, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { getFirestore, collection, addDoc, doc, getDoc, getDocs, updateDoc, deleteDoc, query, where, orderBy } from "firebase/firestore/lite";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -19,7 +19,7 @@ if (firebaseConfig.projectId && firebaseConfig.projectId.trim() !== "") {
     const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
     db = getFirestore(app);
     isMock = false;
-    console.log("Firebase Cloud Firestore successfully initialized.");
+    console.log("Firebase Cloud Firestore Lite successfully initialized.");
   } catch (err) {
     console.warn("Failed to initialize Firebase Firestore, falling back to mock mode:", err);
   }
@@ -113,48 +113,52 @@ export async function submitPendingAlumnus(alumnus) {
   } else {
     const ref = collection(db, "pending_submissions");
     const docRef = await addDoc(ref, payload);
+    window.dispatchEvent(new Event("cloudSubmissionsUpdate"));
     return docRef.id;
   }
 }
 
 /**
- * Subscribes to real-time updates for APPROVED entries (verified === true)
+ * Subscribes to updates for APPROVED entries (verified === true)
  */
 export function subscribeApprovedSubmissions(onUpdate) {
   if (isMock) {
-    // Return a function to trigger local updates
     const triggerUpdate = () => {
       const list = getMockSubmissions().filter(s => s.verified === true);
       onUpdate(list);
     };
-    // Initialize immediately
     triggerUpdate();
-    // Watch localStorage changes (on other tabs or manually dispatched)
     const listener = () => triggerUpdate();
     window.addEventListener("storage", listener);
-    // Custom event to dispatch on local changes
     window.addEventListener("localSubmissionsUpdate", listener);
     return () => {
       window.removeEventListener("storage", listener);
       window.removeEventListener("localSubmissionsUpdate", listener);
     };
   } else {
-    const q = query(
-      collection(db, "pending_submissions"),
-      where("verified", "==", true),
-      orderBy("createdAt", "desc")
-    );
-    return onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      onUpdate(list);
-    }, (err) => {
-      console.error("Firestore approved subscription error:", err);
-    });
+    const fetchApproved = () => {
+      const q = query(
+        collection(db, "pending_submissions"),
+        where("verified", "==", true),
+        orderBy("createdAt", "desc")
+      );
+      getDocs(q).then((snapshot) => {
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        onUpdate(list);
+      }).catch(err => {
+        console.error("Firestore approved getDocs error:", err);
+      });
+    };
+    fetchApproved();
+    window.addEventListener("cloudSubmissionsUpdate", fetchApproved);
+    return () => {
+      window.removeEventListener("cloudSubmissionsUpdate", fetchApproved);
+    };
   }
 }
 
 /**
- * Subscribes to real-time updates for ALL pending entries (verified === false)
+ * Subscribes to updates for ALL pending entries (verified === false)
  * exclusively for the admin board.
  */
 export function subscribePendingSubmissions(onUpdate) {
@@ -172,17 +176,24 @@ export function subscribePendingSubmissions(onUpdate) {
       window.removeEventListener("localSubmissionsUpdate", listener);
     };
   } else {
-    const q = query(
-      collection(db, "pending_submissions"),
-      where("verified", "==", false),
-      orderBy("createdAt", "desc")
-    );
-    return onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      onUpdate(list);
-    }, (err) => {
-      console.error("Firestore pending subscription error:", err);
-    });
+    const fetchPending = () => {
+      const q = query(
+        collection(db, "pending_submissions"),
+        where("verified", "==", false),
+        orderBy("createdAt", "desc")
+      );
+      getDocs(q).then((snapshot) => {
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        onUpdate(list);
+      }).catch(err => {
+        console.error("Firestore pending getDocs error:", err);
+      });
+    };
+    fetchPending();
+    window.addEventListener("cloudSubmissionsUpdate", fetchPending);
+    return () => {
+      window.removeEventListener("cloudSubmissionsUpdate", fetchPending);
+    };
   }
 }
 
@@ -206,17 +217,14 @@ export async function approvePendingAlumnus(id) {
     );
 
     if (duplicateIndex !== -1) {
-      // Overwrite the verified entry's content, keep its original id
       list[duplicateIndex] = {
         ...pendingEntry,
         id: list[duplicateIndex].id,
         verified: true,
-        createdAt: Date.now() // reset approval timestamp
+        createdAt: Date.now()
       };
-      // Delete the pending entry
       list.splice(pendingIndex, 1);
     } else {
-      // Simply promote
       pendingEntry.verified = true;
       pendingEntry.createdAt = Date.now();
     }
@@ -231,7 +239,6 @@ export async function approvePendingAlumnus(id) {
     const pendingData = pendingSnap.data();
     const pendingNormName = normalizeName(pendingData.name);
 
-    // Query all verified entries
     const q = query(
       collection(db, "pending_submissions"),
       where("verified", "==", true)
@@ -247,22 +254,20 @@ export async function approvePendingAlumnus(id) {
     });
 
     if (duplicateDocId) {
-      // Overwrite duplicate verified record in place
       const verifiedRef = doc(db, "pending_submissions", duplicateDocId);
       await updateDoc(verifiedRef, {
         ...pendingData,
         verified: true,
         createdAt: Date.now()
       });
-      // Delete the duplicate pending entry
       await deleteDoc(pendingRef);
     } else {
-      // Simply update pending entry to verified
       await updateDoc(pendingRef, {
         verified: true,
         createdAt: Date.now()
       });
     }
+    window.dispatchEvent(new Event("cloudSubmissionsUpdate"));
   }
 }
 
@@ -278,5 +283,6 @@ export async function deletePendingAlumnus(id) {
   } else {
     const ref = doc(db, "pending_submissions", id);
     await deleteDoc(ref);
+    window.dispatchEvent(new Event("cloudSubmissionsUpdate"));
   }
 }
